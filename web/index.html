@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CustomHtop WebUI</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="theme-pink">
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>CustomHtop</h1>
+          <p id="statusLine">Подключение...</p>
+        </div>
+      </div>
+
+      <div class="top-actions">
+        <button id="themeToggle" class="tool-button" type="button">Белая тема</button>
+        <button id="pauseToggle" class="tool-button" type="button">Пауза</button>
+        <label class="field compact">
+          <span>Обновление</span>
+          <input id="refreshInput" type="number" min="250" max="10000" step="250" value="1000">
+          <span>мс</span>
+        </label>
+      </div>
+    </header>
+
+    <section class="meters">
+      <article class="bank-card" aria-label="Memory usage">
+        <div class="bank-label">
+          <strong>Memory</strong>
+          <span id="memoryText">-</span>
+        </div>
+        <div class="jar">
+          <div id="memoryCache" class="jar-fill cache"></div>
+          <div id="memoryBuffers" class="jar-fill buffers"></div>
+          <div id="memoryUsed" class="jar-fill used"></div>
+          <div class="jar-shine"></div>
+        </div>
+        <div class="legend">
+          <span><i class="swatch used"></i>used</span>
+          <span><i class="swatch buffers"></i>buffers</span>
+          <span><i class="swatch cache"></i>cache</span>
+        </div>
+      </article>
+
+      <article class="bank-card" aria-label="Swap usage">
+        <div class="bank-label">
+          <strong>Swap</strong>
+          <span id="swapText">-</span>
+        </div>
+        <div class="jar">
+          <div id="swapUsed" class="jar-fill used"></div>
+          <div class="jar-shine"></div>
+        </div>
+        <div class="legend">
+          <span><i class="swatch used"></i>used</span>
+          <span><i class="swatch critical"></i>critical</span>
+        </div>
+      </article>
+
+      <article class="cpu-card">
+        <div class="cpu-title">
+          <strong>CPU cores</strong>
+          <span id="cpuCount">-</span>
+        </div>
+        <div class="cpu-legend">
+          <span><i class="swatch low"></i>low</span>
+          <span><i class="swatch high"></i>high</span>
+          <span><i class="swatch kernel"></i>kernel</span>
+          <span><i class="swatch background"></i>background</span>
+        </div>
+        <div id="cpuGrid" class="cpu-grid" aria-live="polite"></div>
+      </article>
+    </section>
+
+    <section class="table-panel">
+      <div class="controls">
+        <details class="sort-drawer" open>
+          <summary>Сортировка и фильтры</summary>
+          <div class="drawer-content">
+            <label class="field">
+              <span>Поле</span>
+              <select id="sortSelect"></select>
+            </label>
+            <button id="sortDirection" class="icon-button" type="button" title="Направление сортировки">↓</button>
+            <div class="segment" id="stateFilters" role="group" aria-label="State filters">
+              <button class="active" type="button" data-state="all">Все</button>
+              <button type="button" data-state="sleeping">Спящие</button>
+              <button type="button" data-state="stopped">Остановленные</button>
+              <button type="button" data-state="zombie">Зомби</button>
+              <button type="button" data-state="running">Running</button>
+            </div>
+            <label class="toggle">
+              <input id="treeToggle" type="checkbox">
+              <span>Дерево</span>
+            </label>
+            <label class="toggle">
+              <input id="highlightToggle" type="checkbox" checked>
+              <span>Выделять новые</span>
+            </label>
+          </div>
+        </details>
+
+        <label class="search-box">
+          <span class="search-icon" aria-hidden="true"></span>
+          <input id="searchInput" type="search" placeholder="Поиск по PID, user, command...">
+        </label>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr id="tableHead"></tr>
+          </thead>
+          <tbody id="processRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <nav id="contextMenu" class="context-menu" hidden>
+    <button type="button" data-action="kill">SIGKILL</button>
+    <button type="button" data-action="stop">SIGSTOP</button>
+    <button type="button" data-action="signal">Выбрать сигнал</button>
+  </nav>
+
+  <dialog id="signalDialog" class="signal-dialog">
+    <form method="dialog" class="dialog-shell">
+      <header>
+        <strong id="signalTitle">Сигнал</strong>
+        <button class="icon-button" value="cancel" type="submit" title="Закрыть">×</button>
+      </header>
+      <label class="search-box full">
+        <span class="search-icon" aria-hidden="true"></span>
+        <input id="signalSearch" type="search" placeholder="Найти сигнал">
+      </label>
+      <div id="signalList" class="signal-list"></div>
+    </form>
+  </dialog>
+
+  <div id="toastStack" class="toast-stack" aria-live="assertive"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
