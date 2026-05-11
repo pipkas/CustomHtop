@@ -59,6 +59,7 @@ Makefile
 *.exe
 *.out
 *.app
+custom-htop
 
 # Отладочная информация
 *.dSYM/
