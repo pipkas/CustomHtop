@@ -60,6 +60,7 @@ Makefile
 *.out
 *.app
 custom-htop
+custom_htop
 
 # Отладочная информация
 *.dSYM/
@@ -74,6 +75,8 @@ compile_flags.txt
 # ========================
 .DS_Store
 Thumbs.db
+.codex
+.agents
 desktop.ini
 *~
 *.swp

@@ -93,10 +93,15 @@
               <button type="button" data-state="stopped">Остановленные</button>
               <button type="button" data-state="zombie">Зомби</button>
               <button type="button" data-state="running">Running</button>
+              <button type="button" data-state="idle">Idle</button>
             </div>
             <label class="toggle">
               <input id="treeToggle" type="checkbox">
               <span>Дерево</span>
+            </label>
+            <label class="toggle">
+              <input id="threadsToggle" type="checkbox">
+              <span>Потоки</span>
             </label>
             <label class="toggle">
               <input id="highlightToggle" type="checkbox" checked>
@@ -105,6 +110,7 @@
           </div>
         </details>
 
+        <button id="processFocusToggle" class="tool-button table-focus-button" type="button">На весь экран</button>
         <label class="search-box">
           <span class="search-icon" aria-hidden="true"></span>
           <input id="searchInput" type="search" placeholder="Поиск по PID, user, command...">

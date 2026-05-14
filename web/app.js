@@ -3,7 +3,6 @@ const columns = [
   { key: "pid", label: "PID", numeric: true },
   { key: "user", label: "USER" },
   { key: "priority", label: "PRI", numeric: true },
-  { key: "nice", label: "NI", numeric: true },
   { key: "virt", label: "VIRT", numeric: true, format: (p) => humanBytes(p.virt) },
   { key: "res", label: "RES", numeric: true, format: (p) => humanBytes(p.res) },
   { key: "shr", label: "SHR", numeric: true, format: (p) => humanBytes(p.shr) },
@@ -15,7 +14,6 @@ const columns = [
   { key: "pgrp", label: "PGRP", numeric: true },
   { key: "session", label: "SESSION", numeric: true },
   { key: "threads", label: "THR", numeric: true },
-  { key: "ttyNr", label: "TTY", numeric: true },
   { key: "command", label: "Command" },
 ];
 const state = {
@@ -29,7 +27,10 @@ const state = {
   refreshMs: 1000,
   selectedPid: null,
   tree: false,
+  showThreads: false,
   highlightNew: true,
+  processFocus: false,
+  collapsedPids: new Set(),
   previousPids: new Set(),
   newUntil: new Map(),
   signalTargetPid: null,
@@ -52,7 +53,9 @@ const els = {
   sortDirection: byId("sortDirection"),
   stateFilters: byId("stateFilters"),
   treeToggle: byId("treeToggle"),
+  threadsToggle: byId("threadsToggle"),
   highlightToggle: byId("highlightToggle"),
+  processFocusToggle: byId("processFocusToggle"),
   searchInput: byId("searchInput"),
   tableHead: byId("tableHead"),
   processRows: byId("processRows"),
@@ -186,7 +189,7 @@ function compareProcess(a, b) {
   return state.sortDirection === "asc" ? result : -result;
 }
 function matchesFilter(process) {
-  if (state.filter === "sleeping" && !["S", "D", "I"].includes(process.state)) {
+  if (state.filter === "sleeping" && !["S", "D"].includes(process.state)) {
     return false;
   }
   if (state.filter === "stopped" && !["T", "t"].includes(process.state)) {
@@ -198,12 +201,17 @@ function matchesFilter(process) {
   if (state.filter === "running" && process.state !== "R") {
     return false;
   }
+  if (state.filter === "idle" && process.state !== "I") {
+    return false;
+  }
   const query = state.search.trim().toLowerCase();
   if (!query) {
     return true;
   }
   const haystack = [
     process.pid,
+    process.tid,
+    process.processPid,
     process.ppid,
     process.pgrp,
     process.session,
@@ -219,23 +227,65 @@ function matchesFilter(process) {
     process.time,
     process.comm,
     process.command,
+    process.isThread ? "thread" : "process",
   ].join(" ").toLowerCase();
   return haystack.includes(query);
 }
+function treeCompare(a, b) {
+  if (a.isThread !== b.isThread) {
+    return a.isThread ? 1 : -1;
+  }
+  if (a.pid !== b.pid) {
+    return a.pid - b.pid;
+  }
+  return a.command.localeCompare(b.command, undefined, { numeric: true, sensitivity: "base" });
+}
+function treePrefix(depth) {
+  if (depth <= 0) {
+    return "";
+  }
+  return `${"|-  ".repeat(Math.max(0, depth - 1))}|- `;
+}
 function flattenTree(processes) {
   const byParent = new Map();
-  const ids = new Set(processes.map((process) => process.pid));
+  const byPid = new Map();
+  for (const process of processes) {
+    byPid.set(process.pid, process);
+  }
   for (const process of processes) {
     const list = byParent.get(process.ppid) ?? [];
     list.push(process);
     byParent.set(process.ppid, list);
   }
   for (const list of byParent.values()) {
-    list.sort(compareProcess);
+    list.sort(treeCompare);
   }
+  const includeContext = state.filter !== "all" || state.search.trim() !== "";
+  const visibleByFilter = new Map();
+  const evaluating = new Set();
+  const evaluated = new Set();
+  const isVisibleByFilter = (process) => {
+    if (evaluated.has(process.pid)) {
+      return visibleByFilter.get(process.pid) ?? false;
+    }
+    if (evaluating.has(process.pid)) {
+      return matchesFilter(process);
+    }
+    evaluating.add(process.pid);
+    let visible = matchesFilter(process);
+    if (includeContext) {
+      for (const child of byParent.get(process.pid) ?? []) {
+        visible = isVisibleByFilter(child) || visible;
+      }
+    }
+    evaluating.delete(process.pid);
+    evaluated.add(process.pid);
+    visibleByFilter.set(process.pid, visible);
+    return visible;
+  };
   const roots = processes
-    .filter((process) => !ids.has(process.ppid) || process.pid === process.ppid)
-    .sort(compareProcess);
+    .filter((process) => !byPid.has(process.ppid) || process.pid === process.ppid)
+    .sort(treeCompare);
   const result = [];
   const seen = new Set();
   const visit = (process, depth) => {
@@ -243,7 +293,21 @@ function flattenTree(processes) {
       return;
     }
     seen.add(process.pid);
-    result.push({ ...process, depth });
+    if (!isVisibleByFilter(process)) {
+      return;
+    }
+    const children = byParent.get(process.pid) ?? [];
+    result.push({
+      ...process,
+      depth,
+      treePrefix: treePrefix(depth),
+      hasChildren: children.length > 0,
+      childCount: children.length,
+      rowMatches: matchesFilter(process),
+    });
+    if (state.collapsedPids.has(process.pid)) {
+      return;
+    }
     for (const child of byParent.get(process.pid) ?? []) {
       visit(child, depth + 1);
     }
@@ -251,7 +315,7 @@ function flattenTree(processes) {
   for (const root of roots) {
     visit(root, 0);
   }
-  for (const process of processes.sort(compareProcess)) {
+  for (const process of [...processes].sort(treeCompare)) {
     visit(process, 0);
   }
   return result;
@@ -260,8 +324,9 @@ function processRows() {
   if (!state.snapshot) {
     return [];
   }
-  const filtered = state.snapshot.processes.filter(matchesFilter);
-  return state.tree ? flattenTree(filtered) : filtered.sort(compareProcess);
+  const processes = [...state.snapshot.processes];
+  const filtered = processes.filter(matchesFilter);
+  return state.tree ? flattenTree(processes) : filtered.sort(compareProcess);
 }
 function renderProcesses() {
   const rows = processRows();
@@ -271,6 +336,8 @@ function renderProcesses() {
     tr.dataset.pid = String(process.pid);
     tr.classList.toggle("selected", state.selectedPid === process.pid);
     tr.classList.toggle("new-process", state.highlightNew && (state.newUntil.get(process.pid) ?? 0) > now);
+    tr.classList.toggle("thread-row", process.isThread);
+    tr.classList.toggle("tree-context", state.tree && process.rowMatches === false);
     tr.addEventListener("click", () => {
       state.selectedPid = process.pid;
       renderProcesses();
@@ -294,13 +361,43 @@ function renderProcesses() {
       else if (column.key === "command") {
         td.className = "command-cell";
         if (state.tree) {
+          const collapse = document.createElement("button");
+          collapse.type = "button";
+          collapse.className = "tree-collapse";
+          if (process.hasChildren) {
+            collapse.textContent = state.collapsedPids.has(process.pid) ? "+" : "-";
+            collapse.title = state.collapsedPids.has(process.pid) ? "Развернуть группу" : "Свернуть группу";
+            collapse.addEventListener("click", (event) => {
+              event.stopPropagation();
+              if (state.collapsedPids.has(process.pid)) {
+                state.collapsedPids.delete(process.pid);
+              }
+              else {
+                state.collapsedPids.add(process.pid);
+              }
+              renderProcesses();
+            });
+          }
+          else {
+            collapse.disabled = true;
+            collapse.textContent = "";
+          }
+          td.appendChild(collapse);
           const prefix = document.createElement("span");
           prefix.className = "tree-prefix";
-          prefix.textContent = process.depth ? `${"│  ".repeat(Math.max(0, process.depth - 1))}├─ ` : "";
+          prefix.textContent = process.treePrefix ?? "";
           td.appendChild(prefix);
         }
+        if (process.isThread) {
+          const badge = document.createElement("span");
+          badge.className = "thread-badge";
+          badge.textContent = "thread";
+          td.appendChild(badge);
+        }
         td.append(document.createTextNode(column.format ? column.format(process) : String(process[column.key] ?? "")));
-        td.title = process.command;
+        td.title = process.isThread
+          ? `Thread ${process.tid} of PID ${process.processPid}: ${process.command}`
+          : process.command;
       }
       else {
         td.textContent = column.format ? column.format(process) : String(process[column.key] ?? "");
@@ -311,12 +408,13 @@ function renderProcesses() {
   }));
   if (state.snapshot) {
     const total = state.snapshot.processes.length;
-    els.statusLine.textContent = `${total} Tasks`;
+    const suffix = state.showThreads ? " с потоками" : "";
+    els.statusLine.textContent = `${rows.length}/${total} Tasks${suffix}`;
   }
 }
 async function loadSnapshot() {
   try {
-    const response = await fetch("/api/snapshot", { cache: "no-store" });
+    const response = await fetch(state.showThreads ? "/api/snapshot?threads=1" : "/api/snapshot", { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -424,7 +522,17 @@ function selectedPid() {
     showToast("Процесс не выбран", "Выберите строку процесса", true);
     return null;
   }
-  return state.selectedPid;
+  const process = state.snapshot?.processes.find((item) => item.pid === state.selectedPid);
+  if (!process) {
+    showToast("Процесс исчез", `PID ${state.selectedPid} больше не найден`, true);
+    return null;
+  }
+  return process?.signalPid ?? state.selectedPid;
+}
+function setProcessFocus(enabled) {
+  state.processFocus = enabled;
+  document.body.classList.toggle("process-focus", enabled);
+  els.processFocusToggle.textContent = enabled ? "Обычный вид" : "На весь экран";
 }
 function bindEvents() {
   els.themeToggle.addEventListener("click", () => {
@@ -476,9 +584,19 @@ function bindEvents() {
     state.tree = els.treeToggle.checked;
     renderProcesses();
   });
+  els.threadsToggle.addEventListener("change", () => {
+    state.showThreads = els.threadsToggle.checked;
+    state.selectedPid = null;
+    state.previousPids.clear();
+    state.newUntil.clear();
+    void loadSnapshot();
+  });
   els.highlightToggle.addEventListener("change", () => {
     state.highlightNew = els.highlightToggle.checked;
     renderProcesses();
+  });
+  els.processFocusToggle.addEventListener("click", () => {
+    setProcessFocus(!state.processFocus);
   });
   els.searchInput.addEventListener("input", () => {
     state.search = els.searchInput.value;
@@ -513,19 +631,36 @@ function bindEvents() {
     if (typing) {
       return;
     }
-    const pid = state.selectedPid;
-    if (event.key === "Delete" && pid !== null) {
+    if (event.key === "Delete") {
       event.preventDefault();
-      await sendSignal(pid, 9);
+      const pid = selectedPid();
+      if (pid !== null) {
+        await sendSignal(pid, 9);
+      }
     }
-    else if ((event.key === "k" || event.key === "K") && pid !== null) {
-      await sendSignal(pid, 9);
+    else if (event.key === "k" || event.key === "K") {
+      const pid = selectedPid();
+      if (pid !== null) {
+        await sendSignal(pid, 9);
+      }
     }
-    else if ((event.key === "s" || event.key === "S") && pid !== null) {
-      await sendSignal(pid, 19);
+    else if (event.key === "s" || event.key === "S") {
+      const pid = selectedPid();
+      if (pid !== null) {
+        await sendSignal(pid, 19);
+      }
     }
-    else if ((event.key === "g" || event.key === "G") && pid !== null) {
-      openSignalDialog(pid);
+    else if (event.key === "g" || event.key === "G") {
+      const pid = selectedPid();
+      if (pid !== null) {
+        openSignalDialog(pid);
+      }
+    }
+    else if (event.key === "Escape" && state.processFocus) {
+      setProcessFocus(false);
+    }
+    else if (event.key === "f" || event.key === "F") {
+      setProcessFocus(!state.processFocus);
     }
   });
   els.signalSearch.addEventListener("input", renderSignals);
